@@ -1,12 +1,15 @@
+
 //Librerías
-#include "DHT.h"               
-#include <Wire.h>
-#include <ESP32Time.h>
-#include <WiFi.h>
-#include <U8g2lib.h>
-#include <WiFiClientSecure.h>
-#include <UniversalTelegramBot.h>   // Universal Telegram Bot Library written by Brian Lough: https://github.com/witnessmenow/Universal-Arduino-Telegram-Bot
-#include <ArduinoJson.h>
+#include "WiFi.h"
+#include "WiFiClientSecure.h"
+#include "UniversalTelegramBot.h"
+#include "ArduinoJson.h"
+
+#include "U8g2lib.h"
+#include "string"
+#include "DHT_U.h"
+#include "Adafruit_Sensor.h"
+#include "Wire.h"
 
 //Pantalla Display en pixeles
 #define SCREEN_WIDTH 128 
@@ -16,202 +19,86 @@
 #define DHTPIN 23 
 #define DHTTYPE DHT11 
 
+// Inicializar el Sensor
+DHT dht(DHTPIN, DHTTYPE);
+
 //Pines
 #define PIN_BOTON_SUBIR 35 
 #define PIN_BOTON_BAJAR 34
 bool estadoBoton1 = false;
 bool estadoBoton2 = false;
 
-
-
-//Máquina de Estados
+//Máquina de Estados Principal
 #define PANTALLA_INICIAL 1    
 #define LIMPIAR_1 2
 #define PANTALLA_CAMBIOS 3
 #define LIMPIAR_2 4
 
+
+#define PRIMER_BOTON 1    
+#define ESPERA_1 2
+#define SEGUNDO_BOTON 3
+#define ESPERA_2 4
+#define TERCER_BOTON 3
+#define ESPERA_3 4
+
 //Estado inicial de la máquina
-int estado = 1;  
+int estado = 1;
 
-// Inicializar el Sensor
-DHT dht(DHTPIN, DHTTYPE);
-
-//Inicializar rtc
-int gmt;
-struct tm timeinfo;
-ESP32Time rtc;
-
-//Reloj
-long unsigned int timestamp; 
-const char *ntpServer = "south-america.pool.ntp.org";
-long gmtOffset_sec = -10800;
-const int daylightOffset_sec = 0;
-
-//WiFi
-const char* ssid = "ORT-IoT";           
+//WiFI
+const char* ssid = "ORT-IoT";
 const char* password = "OrtIOTnew22$2";
 
 // Initialize Telegram BOT
-#define BOTtoken "6085478906:AAGkmo5pVC1NyXsRvGHJQ10DszGOgBZxsws"  // cambiar por token 
-
-#define CHAT_ID "-1001851624507" /// 
+#define BOTtoken "6085478906:AAGkmo5pVC1NyXsRvGHJQ10DszGOgBZxsws"
+#define CHAT_ID "-1001851624507"
 
 WiFiClientSecure client;
 UniversalTelegramBot bot(BOTtoken, client);
 
-//Constructores y variables globales
-U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
-
 int botRequestDelay = 1000; /// intervalo
 unsigned long lastTimeBotRan; /// ultimo tiempo
 
+//Constructores y variables globales
+U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
+
+int VALOR_UMBRAL = 10;
+
+
+float t;
+char temp[5];
+
+
+//Variables delay
+unsigned long tiempoAhora, tiempoCambio, tiempoAviso;
+
+#define intervalo 5000
+
 //Funciones
-void pedir_lahora(void);
-void setup_rtc_ntp(void);
-void print_temperatura_humedad(void );
 void initWiFi();
 
-void setup() 
-{
-  
-  Serial.begin(9600);
-  u8g2.begin();
-  pinMode(PIN_BOTON_SUBIR, INPUT_PULLUP);    
-  pinMode(PIN_BOTON_BAJAR, INPUT_PULLUP);  
-  
-  Serial.println("Conectandose a Wi-Fi...");
+// Funcion Telegram
+void handleNewMessages(int numNewMessages) {
+  Serial.println("Mensaje nuevo");
+  Serial.println(String(numNewMessages));
 
+  for (int i = 0; i < numNewMessages; i++) {
+    String chat_id = String(bot.messages[i].chat_id);
+    if (chat_id != CHAT_ID) {  
+      bot.sendMessage(chat_id, "Unauthorized user", "");
+      continue;
+    }
+    String text = bot.messages[i].text;
+    Serial.println(text);
 
-  //Llamo a las funciones
-  initWiFi(); 
-  setup_rtc_ntp();
+    String from_name = bot.messages[i].from_name;
 
+    if (text == "/temp") {
+      bot.sendMessage(chat_id, temp , "");
+    }
   }
-  
-
-void loop() 
-{
-  
-  switch(estado)
-  {
-    //Pantalla que muestra hora y temperatura
-    case PANTALLA_INICIAL: 
-   
-{      
-      Serial.println("PANTALLA INICIAL"); 
-      delay(2000);
-
-      pedir_lahora();
-    
-      
-    int hora = timeinfo.tm_hour;
-    int minutos = timeinfo.tm_min;
-    char stringhoras[7];  
-    char stringminutos[7];
-    float t = dht.readTemperature();  
-    char stringt[5];
-    
-    u8g2.clearBuffer();  
-    u8g2.setFont(u8g_font_5x7); 
-
-    u8g2.drawStr(0,30,"Hora : ");
-    u8g2.drawStr(0,15,"Temperatura: ");
-    sprintf (stringhoras, "%d" , hora); 
-    u8g2.setCursor(50, 30);
-    u8g2.print(stringhoras);
-    u8g2.drawStr(55,30,":");
-    u8g2.setCursor(60, 30);
-    sprintf (stringminutos, "%d" , minutos); 
-    u8g2.print(stringminutos);
-    sprintf (stringt, "%f" , t); 
-    u8g2.setCursor(80, 15);
-    u8g2.print(stringt);
-
-    u8g2.sendBuffer();  
-      
-}
-    break;
-    delay(5000);
-        
-      if(digitalRead(PIN_BOTON_BAJAR) == LOW && digitalRead(PIN_BOTON_SUBIR) == LOW)
-      {
-           Serial.println("Boton leído");
-        estado = LIMPIAR_1;
-      }
-
-    //Espera a que se suelten los botones para pasar a la siguiente pantalla
-    case LIMPIAR_1: 
-    { 
-      Serial.println("PRIMER ESPERA"); 
-      if(digitalRead(PIN_BOTON_BAJAR) == HIGH && digitalRead(PIN_BOTON_SUBIR) == HIGH)
-      {
-        estado = PANTALLA_CAMBIOS;
-      }
-    }
-    break;
-
-    //Pantalla que permite cambiar la hora
-    case PANTALLA_CAMBIOS: 
-    {
-
-    Serial.println("PANTALLA CAMBIOS");
-    float tiempo = gmtOffset_sec;
-    char stringtiempo[5];  
-    
-    u8g2.clearBuffer();  
-    u8g2.setFont(u8g_font_5x7); 
-
-    u8g2.drawStr(0,15,"GMT: ");
-    sprintf (stringtiempo, "%f" , tiempo);
-    u8g2.setCursor(80, 15); 
-    u8g2.print(stringtiempo);
-
-    u8g2.sendBuffer();       
-      
-      if(digitalRead(PIN_BOTON_BAJAR) == LOW) 
-      {
-        estadoBoton1 = true;
-      }
-      if(digitalRead(PIN_BOTON_BAJAR) == HIGH && estadoBoton1 == true) 
-      {
-        estadoBoton1 = false;
-        gmtOffset_sec = gmtOffset_sec + 3600;
-
-      }    
-
-      if(digitalRead(PIN_BOTON_SUBIR) == LOW)
-      {
-        estadoBoton2 = true;
-      }
-      if(digitalRead(PIN_BOTON_SUBIR) == HIGH && estadoBoton2 == true)
-      {
-        estadoBoton2 = false;
-        gmtOffset_sec = gmtOffset_sec - 3600;
-      }    
-      
-      if(digitalRead(PIN_BOTON_BAJAR) == LOW && digitalRead(PIN_BOTON_SUBIR) == LOW) 
-      {
-        estado = LIMPIAR_2;
-      }
-    }
-    break;
-
-    //Espera a que se suelten los botones para volver a la pantalla inicial
-    case LIMPIAR_2: 
-    {
-      Serial.println("SEGUNDA ESPERA");
-      if(digitalRead(PIN_BOTON_BAJAR) == HIGH && digitalRead(PIN_BOTON_SUBIR) == HIGH) 
-      {
-        estado = PANTALLA_INICIAL;
-        setup_rtc_ntp();      
-      }
-    }
-    break;   
-  }
-
 }
 
-//Función conexión WiFi
 void initWiFi() 
 {       
   WiFi.mode(WIFI_STA);                                
@@ -228,102 +115,181 @@ void initWiFi()
   Serial.println(Hola Mundo);
 }
 
-//Funciones Tiempo
-void setup_rtc_ntp(void)
-{
-  
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-  timestamp = time(NULL);
-  rtc.setTime(timestamp + gmtOffset_sec);
+void setup() {
+  Serial.begin(115200);
+
+  //Llamo a la función
+  initWiFi(); 
+
+  // Print ESP32 Local IP Address
+  Serial.println(WiFi.localIP());
+  bot.sendMessage(CHAT_ID, "Bot Hola mundo", "");
+
+  Serial.println(F("OLED test"));
+  u8g2.begin();
+  dht.begin();
+
+  pinMode(PIN_BOTON_SUBIR, INPUT_PULLUP);    
+  pinMode(PIN_BOTON_BAJAR, INPUT_PULLUP); 
 }
 
+void loop() {
 
-void pedir_lahora(void)
-{
-  if (!getLocalTime(&timeinfo))
-  {
-    Serial.println("Veo la hora del rtc interno ");
-    timestamp = rtc.getEpoch() - gmtOffset_sec;
-    timeinfo = rtc.getTimeStruct();
-  }
-
-  else
-  {
-    Serial.print("NTP Time:");
-    timestamp = time(NULL);
-  }
-
-  return;
-}
-
-// funcion que se comunica con telegram
-void handleNewMessages(int numNewMessages) {
-  Serial.println("Mensaje nuevo");
-  Serial.println(String(numNewMessages));
-
-  for (int i=0; i<numNewMessages; i++) {
-    // inicio de verificacion
-    String chat_id = String(bot.messages[i].chat_id);
-    if (chat_id != CHAT_ID){   ////si el id no corresponde da error . en caso de que no se quiera comprobar el id se debe sacar esta parte 
-      bot.sendMessage(chat_id, "Unauthorized user", "");
-      continue;
-    }
-    ///fin de verificacion
-
-    // imprime el msj recibido 
-    String text = bot.messages[i].text;
-    Serial.println(text);
-
-    String from_name = bot.messages[i].from_name;
-
-    /// si recibe /led on enciende el led 
-    if (text == "/led_on") {  
-      bot.sendMessage(chat_id, "LED state set to ON", "");
-      ledState = HIGH;
-      digitalWrite(ledPin, ledState);
-    }
-    
-    if (text == "/led_off") {
-      bot.sendMessage(chat_id, "LED state set to OFF", "");
-      ledState = LOW;
-      digitalWrite(ledPin, ledState);
-    }
-    
-    if (text == "/state") {
-      if (digitalRead(ledPin)){
-        bot.sendMessage(chat_id, "LED is ON", "");
-      }
-      else{
-        bot.sendMessage(chat_id, "LED is OFF", "");
-      }
-    }
-  }
-}
-
-void esperar5segundos(void)
-{
-   if (millis() > lastTimeBotRan + botRequestDelay) {
+  //Telegram
+  if (millis() > lastTimeBotRan + botRequestDelay) {
     int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
 
-    while(numNewMessages) {
+    while (numNewMessages) {
       Serial.println("Veo los msj nuevos");
       handleNewMessages(numNewMessages);
       numNewMessages = bot.getUpdates(bot.last_message_received + 1);
     }
     lastTimeBotRan = millis();
-  
   }
 
-  return;
-}
 
-void maquinaDeEstados (void)
-{
- switch(estado)
+  //Temperatura
+  t = dht.readTemperature();
+  
+  sprintf(temp, "%2.1f", t);
+  Serial.println(temp);
+
+  if (t >= VALOR_UMBRAL && (tiempoAhora - tiempoAviso <= 10000))
   {
-    case S1A: 
-    {
-      
-  } 
+    bot.sendMessage(CHAT_ID, "Supero el valor umbral" , "");
+  }
+
+  char umbral[2];
+  sprintf(umbral, "%i", VALOR_UMBRAL);
+  Serial.println(umbral);
+
+  tiempoAhora = millis();
+
+  Serial.print("Tiempo ahora: ");
+  Serial.println(tiempoAhora);
+  Serial.print("Tiempo cambio: ");
+  Serial.println(tiempoCambio);
+
+
+  //Máquina de Estados
+  switch (maquina) {
+    case pantalla1:
+      u8g2.setFont(u8g2_font_ncenB14_tr);
+      u8g2.drawStr(0, 15, "Temperatura: ");
+      u8g2.drawStr(80, 15, temp);
+      u8g2.drawStr(50, 27, "C");
+      u8g2.drawStr(0, 30, "VU:");
+      u8g2.drawStr(80, 30, umbral);
+      u8g2.sendBuffer();
+
+      switch (botones) {
+        case PRIMER_BOTON:
+        Serial.println("PRIMER BOTON");
+          if (digitalRead(PIN_BOTON_SUBIR) == LOW) {
+          
+            botones = ESPERA_1;
+          }
+          
+          break;
+
+        case ESPERA_1:
+          Serial.println("ESPERA 1");
+          if (digitalRead(PIN_BOTON_SUBIR) == HIGH) {
+            tiempoCambio = millis();
+            botones = SEGUNDO_BOTON;
+          }
+          break;
+
+        case SEGUNDO_BOTON:
+        Serial.println("SEGUNDO BOTON");
+          if (digitalRead(PIN_BOTON_BAJAR) == LOW) {
+            if (tiempoAhora - tiempoCambio <= intervalo)
+            {
+              //tiempoCambio = millis();
+              botones = ESPERA_2;
+            }
+            else
+            {
+              botones = PRIMER_BOTON;
+            }
+          }
+
+          break;
+
+        case ESPERA_2:
+          Serial.println("ESPERA 2");
+          if (digitalRead(PIN_BOTON_BAJAR) == HIGH) {
+            tiempoCambio = millis();
+            botones = sw3;
+          }
+          break;
+
+        case TERCER_BOTON: 
+          Serial.println("TERCER BOTON");
+          if (tiempoAhora - tiempoCambio <= intervalo)
+          {
+            if (digitalRead(PIN_BOTON_SUBIR) == LOW) {
+              botones = ESPERA_3;
+            }
+          }
+          else
+          {
+            botones = PRIMER_BOTON;
+          }
+          break;
+
+        case ESPERA_3:
+          Serial.println("ESPERA 3");
+          if (digitalRead(PIN_BOTON_SUBIR) == HIGH) {
+            maquina = limpiar1;
+            botones = PRIMER_BOTON;
+          }
+          break;
+      }
+      Serial.println("En estado pantalla 1");
+      break;
+
+    case limpiar1:
+      u8g2.clearBuffer();
+      u8g2.sendBuffer();
+      Serial.println("En estado limpiar 1");
+      if (digitalRead(PIN_BOTON_BAJAR) == HIGH && digitalRead(PIN_BOTON_SUBIR) == HIGH) {
+        maquina = pantalla2;
+      }
+      break;
+
+    case pantalla2:
+      Serial.println("En estado pantalla 2");
+      u8g2.setFont(u8g2_font_ncenB14_tr);
+      u8g2.drawStr(0, 30, "Valor umbral: ");
+      u8g2.drawStr(0, 50, umbral);
+      u8g2.sendBuffer();
+      if (digitalRead(PIN_BOTON_BAJAR) == LOW && digitalRead(PIN_BOTON_SUBIR) == LOW) {
+        maquina = limpiar2;
+      }
+      while (digitalRead(PIN_BOTON_BAJAR) == LOW) {
+        if (digitalRead(PIN_BOTON_BAJAR) == HIGH) {
+          u8g2.clearBuffer();
+          u8g2.sendBuffer();
+          VALOR_UMBRAL++;
+        }
+      }
+      while (digitalRead(PIN_BOTON_SUBIR) == LOW) {
+        if (digitalRead(PIN_BOTON_SUBIR) == HIGH) {
+          u8g2.clearBuffer();
+          u8g2.sendBuffer();
+          VALOR_UMBRAL--;
+        }
+      }
+      break;
+
+    case limpiar2:
+      Serial.println("En estado limpiar 2");
+      u8g2.clearBuffer();
+      u8g2.sendBuffer();
+      if (digitalRead(PIN_BOTON_BAJAR) == HIGH && digitalRead(PIN_BOTON_SUBIR) == HIGH) {
+        maquina = pantalla1;
+      }
+      break;
   }
 }
